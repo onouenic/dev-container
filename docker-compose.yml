@@ -1,0 +1,308 @@
+services:
+  dev-sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TZ: America/Sao_Paulo
+        # Alinhe com o UID/GID real do seu usuário no host (rode `id -u` e
+        # `id -g` no host pra descobrir). Não é mais obrigatório pra resolver
+        # permissão de escrita (isso já é automático via ACL, ver
+        # fix-permissions.sh) — mas ainda é legal alinhar, pra arquivos
+        # criados pelo node aparecerem com o dono certo quando você olhar
+        # do lado de fora do container. Ajustável via .env.
+        USER_UID: ${HOST_UID:-1000}
+        USER_GID: ${HOST_GID:-1000}
+    container_name: dev-sandbox
+
+    # Necessário para o script de firewall configurar iptables lá dentro, e
+    # para o sudo funcionar (ele usa setuid/setgid pra virar root, e o
+    # plugin de auditoria do sudo usa CAP_AUDIT_WRITE pra logar). Sem essas
+    # três, o "sudo /usr/local/bin/init-firewall.sh" do boot falha.
+    # cap_drop primeiro (derruba tudo que o Docker concede por padrão),
+    # cap_add só o estritamente necessário — menos superfície de ataque
+    # caso algo dentro do container seja comprometido.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SETUID
+      - SETGID
+      - AUDIT_WRITE
+
+    networks:
+      - devnet
+
+    # ATENÇÃO: ajuste WORKSPACE_DIR no arquivo .env (caminho ABSOLUTO no host)
+    # Esse diretório deve conter todos os seus projetos como subpastas, ex:
+    #   ~/projects/
+    #     projeto-a/
+    #     projeto-b/
+    #     projeto-c/
+    volumes:
+      - ${WORKSPACE_DIR}:/workspace
+      - claude-code-config:/home/node/.claude
+      - codex-config:/home/node/.codex
+      - qwen-config:/home/node/.qwen
+      - gh-config:/home/node/.config/gh
+      - dev-bash-history:/commandhistory
+
+    environment:
+      - TZ=America/Sao_Paulo
+      - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+      - DISABLE_AUTOUPDATER=1
+      # Git identity (comando boot escreve no ~/.gitconfig do container)
+      - GIT_USER_NAME=${GIT_USER_NAME:-dev}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-dev@local}
+      # GitHub token — trade-off aceito: fica setado no ambiente do container
+      # (todo processo filho herda; o alcance é contido pelo firewall) e, no
+      # boot, também é persistido no gh config (volume gh-config) pro git
+      # credential helper. O boot escreve o hosts.yml diretamente em vez de
+      # usar `gh auth login --with-token`, porque essa recusa rodar com
+      # GH_TOKEN setada no ambiente e valida escopos exigindo read:org (rejeita
+      # tokens só com repo, que já bastam pra git/gh).
+      - GH_TOKEN=${GH_TOKEN:-}
+      # Ollama/local LLM — usado pelo init-firewall.sh no boot
+      - OLLAMA_HOST=${OLLAMA_HOST:-}
+      # ANTHROPIC_API_KEY, OPENAI_API_KEY e GITHUB_TOKEN foram RETIRADOS
+      # daqui de propósito (ver seção de segurança no README): variável de
+      # ambiente é herdada automaticamente por QUALQUER processo filho
+      # (pnpm install, script de postinstall de um pacote comprometido,
+      # etc.), então concentrar tudo aqui expõe o valor pra muito mais
+      # coisa do que só o Claude/Codex/git. Use os fluxos de login
+      # abaixo — a credencial fica só num arquivo, lido só pelo binário
+      # que precisa dela.
+      #
+      # claude login   → sessão salva em claude-code-config
+      # codex login     → sessão salva em codex-config
+      # gh auth login    → sessão salva em gh-config (git usa via credential helper)
+      #
+      # Qwen NÃO entra aqui: ele usa as MESMAS variáveis OPENAI_* que o Codex.
+      # Setar OPENAI_BASE_URL global quebraria o Codex (ele iria pro seu Ollama
+      # em vez da OpenAI de verdade). Configure o Qwen via ~/.qwen/settings.json
+      # (volume qwen-config) — veja instruções no README.
+      #
+      # Bancos e Keycloak: mantidos como env var (mesma rede "devnet",
+      # acessíveis pelo nome do serviço). Risco menor que os tokens acima —
+      # são credenciais só de dev local, sem valor fora deste ambiente, e o
+      # firewall já impede qualquer acesso externo a esses serviços mesmo
+      # que o valor vaze.
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=${MYSQL_USER:-devuser}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-devpass}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-devdb}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-devuser}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-devpass}
+      - POSTGRES_DB=${POSTGRES_DB:-devdb}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-devuser}:${POSTGRES_PASSWORD:-devpass}@postgres:5432/${POSTGRES_DB:-devdb}
+      - MONGO_HOST=mongodb
+      - MONGO_PORT=27017
+      - MONGO_URI=mongodb://${MONGO_ROOT_USER:-root}:${MONGO_ROOT_PASSWORD:-devroot}@mongodb:27017
+      - ETCD_HOST=etcd
+      - ETCD_ENDPOINTS=http://etcd:2379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-devpass}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-devpass}@redis:6379
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-devuser}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-devpass}
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-devuser}:${RABBITMQ_PASSWORD:-devpass}@rabbitmq:5672
+      - KEYCLOAK_URL=http://keycloak:8080
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+
+    working_dir: /workspace
+
+    # Roda no boot, uma vez: configura a auth do GitHub (setup-gh-auth.sh),
+    # normaliza ownership do workspace pro node (rede de segurança pra
+    # projetos que não vieram com HOST_UID/GID alinhado) e sobe o firewall,
+    # depois mantém o container vivo em background. "node" tem sudo
+    # restrito só a esses dois scripts.
+    command: >
+      bash -lc 'git config --global user.name "${GIT_USER_NAME:-dev}"
+      && git config --global user.email "${GIT_USER_EMAIL:-dev@local}"
+      && bash /usr/local/bin/setup-gh-auth.sh
+      && sudo /usr/local/bin/fix-permissions.sh
+      && sudo OLLAMA_HOST="${OLLAMA_HOST:-}" /usr/local/bin/init-firewall.sh
+      && echo "Ambiente pronto."
+      && sleep infinity'
+
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Bancos e auth, atrás de "profiles" — só sobem se você pedir:
+  #   docker compose --profile db --profile auth up -d
+  # Sem a flag --profile, `docker compose up -d` sobe só o dev-sandbox.
+  # ---------------------------------------------------------------------
+
+  mysql:
+    image: mysql:8.4
+    profiles: ["db"]
+    container_name: dev-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devroot}
+      MYSQL_USER: ${MYSQL_USER:-devuser}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-devpass}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-devdb}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - devnet
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    profiles: ["db"]
+    container_name: dev-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-devpass} --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - devnet
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-devpass}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    profiles: ["db"]
+    container_name: dev-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-devuser}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-devpass}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - devnet
+    ports:
+      # Só o painel de management, pra você abrir no navegador do host.
+      # O dev-sandbox acessa via rede interna (rabbitmq:5672), sem precisar
+      # dessa porta publicada.
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16
+    profiles: ["db"]
+    container_name: dev-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-devuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpass}
+      POSTGRES_DB: ${POSTGRES_DB:-devdb}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - devnet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-devuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7
+    profiles: ["db"]
+    container_name: dev-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-devroot}
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - devnet
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.21
+    profiles: ["db"]
+    container_name: dev-etcd
+    command: >
+      etcd
+      --name dev-etcd
+      --data-dir /etcd-data
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd:2379
+      --listen-peer-urls http://0.0.0.0:2380
+      --initial-advertise-peer-urls http://etcd:2380
+      --initial-cluster dev-etcd=http://etcd:2380
+      --initial-cluster-state new
+    volumes:
+      - etcd-data:/etcd-data
+    networks:
+      - devnet
+
+  keycloak-db:
+    image: postgres:16
+    profiles: ["auth"]
+    container_name: dev-keycloak-db
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    networks:
+      - devnet
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: ["auth"]
+    container_name: dev-keycloak
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    ports:
+      # Exposto no host só pra você abrir o console admin no navegador.
+      # O dev-sandbox acessa via rede interna (http://keycloak:8080), sem
+      # precisar dessa porta publicada.
+      - "8080:8080"
+    depends_on:
+      - keycloak-db
+    networks:
+      - devnet
+
+networks:
+  devnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  claude-code-config:
+  codex-config:
+  qwen-config:
+  gh-config:
+  dev-bash-history:
+  mysql-data:
+  postgres-data:
+  mongo-data:
+  etcd-data:
+  redis-data:
+  rabbitmq-data:
+  keycloak-db-data:
