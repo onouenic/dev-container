@@ -25,8 +25,9 @@ chatgpt.com
 dashscope.aliyuncs.com
 chat.qwen.ai
 
-# --- Gateway LLM interno da NIC (Bifrost) ---
-bifrost.gateway.homologacao.devsys.nic.br
+# --- Gateway LLM compatível com OpenAI (Qwen/Codex), se usar ---
+# Adicione aqui o domínio do seu gateway (ver README, seção "Qwen"):
+# seu-gateway.exemplo.com
 
 # --- Docker (pull de imagens-base no build/run via docker-rootless) ---
 .docker.io

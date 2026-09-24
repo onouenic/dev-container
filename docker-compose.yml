@@ -106,8 +106,8 @@ services:
       - EGRESS_PROXY_IP=${EGRESS_PROXY_IP:-172.28.0.2}
       # Silencia só o aviso "EnvHttpProxyAgent is experimental" do item acima.
       - NODE_OPTIONS=--disable-warning=UNDICI-EHPA
-      # Backend LLM do Qwen Code (OpenAI-compatible). Aponta para o gateway
-      # Bifrost interno da NIC; a saída passa pelo egress-proxy (allowlist).
+      # Backend LLM do Qwen Code (OpenAI-compatible). Aponta para um gateway
+      # compatível com a API da OpenAI; a saída passa pelo egress-proxy (allowlist).
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-}

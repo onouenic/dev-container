@@ -52,10 +52,11 @@ ou serve.
 Tudo o que o agente escreve ali vira código no host. Se esse diretório for
 usado por outra coisa, a escrita do agente sai do sandbox por tabela:
 
-- **Containers do host que montam a pasta**: hoje `/opt/sites` inteiro é
-  montado com escrita em `juridico`, `comunic-admin-docker`, `comunic-docker`,
-  `nic-static-docker` e `nic-dynamic-docker`. Um arquivo PHP escrito pelo
-  agente em `/opt/sites` roda na hora nesses containers, que têm rede livre.
+- **Containers do host que montam essa pasta**: se algum container do host
+  monta o diretório com escrita (ex.: um servidor web servindo o document
+  root de um site), um arquivo que o agente escrever ali passa a rodar na
+  hora nesse container — que normalmente tem rede livre. Não use como
+  `WORKSPACE_DIR` nenhuma pasta servida ou montada por outros containers.
 - **Coisas que você roda no host**: `docker compose up` de um projeto
   (o agente pode ter adicionado `privileged` ou o `docker.sock` — e você está
   no grupo `docker`, equivalente a root), `npm install`/`npm run` (scripts do
@@ -302,13 +303,13 @@ variáveis `OPENAI_API_KEY`, `OPENAI_BASE_URL` e `OPENAI_MODEL` (as mesmas do
 Codex — se usar os dois, não as compartilhe sem querer). Configure no `.env` e o
 compose as repassa ao dev-sandbox; aplique com `docker compose up -d dev-sandbox`.
 
-**Gateway interno (ex.: Bifrost NIC)** — recomendado:
+**Gateway compatível com a API da OpenAI** — recomendado:
 
 ```bash
-# no .env
+# no .env  (troque pelos valores do seu gateway)
 OPENAI_API_KEY=<sua-chave>
-OPENAI_BASE_URL=https://bifrost.gateway.homologacao.devsys.nic.br/v1
-OPENAI_MODEL=skynet/qwen3.8-flash-next:125b-a6b-q4_K_M
+OPENAI_BASE_URL=https://<seu-gateway>/v1
+OPENAI_MODEL=<id-do-modelo>
 ```
 
 Três detalhes que evitam os erros mais comuns:
@@ -317,8 +318,8 @@ Três detalhes que evitam os erros mais comuns:
    `docker compose restart egress-proxy`) — senão o proxy bloqueia a saída.
 2. **O `OPENAI_BASE_URL` precisa terminar em `/v1`** — sem isso o gateway
    responde `405 Method Not Allowed`.
-3. **Use o ID exato do modelo** que o gateway expõe, com prefixos e tudo (ex.:
-   `skynet/...`). Liste os disponíveis com:
+3. **Use o ID exato do modelo** que o gateway expõe, com prefixos e tudo
+   (alguns gateways usam `provedor/modelo:tag`). Liste os disponíveis com:
    ```bash
    docker exec -u node dev-sandbox bash -lc \
      'curl -s -H "Authorization: Bearer $OPENAI_API_KEY" "$OPENAI_BASE_URL/models"'
