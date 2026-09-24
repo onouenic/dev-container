@@ -1,0 +1,43 @@
+# Gerado pelo entrypoint.sh a partir deste template — não edite em runtime.
+# Para liberar domínios, edite allowlist.txt e reinicie o egress-proxy.
+
+http_port 3128
+
+# Sem cache, sem pid file, logs no stdout/stderr (docker logs dev-egress-proxy)
+cache deny all
+cache_mem 0 MB
+pid_filename none
+coredump_dir /tmp
+logformat sandbox %tl %>a %Ss/%03>Hs %rm %ru %<a
+access_log stdio:/dev/stdout sandbox
+cache_log /dev/stderr
+visible_hostname egress-proxy
+shutdown_lifetime 1 seconds
+pinger_enable off
+
+# Não vaza detalhes do cliente para os destinos
+forwarded_for delete
+via off
+
+acl sandbox src @SANDBOX_SUBNET@
+acl CONNECT method CONNECT
+acl SSL_ports port 443
+acl Safe_ports port 80 443
+
+# -n: casa só pelo nome pedido, sem DNS reverso. Pedido para IP literal
+# (ex: CONNECT 1.2.3.4:443) nunca casa com a allowlist.
+acl allowlist dstdomain -n "/etc/squid/allowlist.txt"
+
+# Destinos internos/privados: bloqueados mesmo que um domínio liberado
+# resolva para eles (DNS rebinding, host, LAN, metadata de cloud).
+acl private_dst dst 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 ::1 fc00::/7 fe80::/10
+
+http_access deny !sandbox
+
+@OLLAMA_RULES@
+
+http_access deny !Safe_ports
+http_access deny CONNECT !SSL_ports
+http_access deny private_dst
+http_access allow allowlist
+http_access deny all

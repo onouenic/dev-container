@@ -1,362 +1,362 @@
-# Container único para múltiplos projetos
+# dev-sandbox: ambiente isolado para agentes
 
-Diferente do dev container "por projeto" que te passei antes, esta versão sobe
-**um único container persistente** com o seu diretório de projetos inteiro
-montado em `/workspace`. Você entra nele quando quiser trabalhar, navega entre
-os projetos como pastas normais, e sai/entra sem perder o estado do container.
+Um container persistente onde agentes de código (Claude Code, Codex, Qwen)
+podem fazer o que quiserem, com os bancos e serviços das aplicações ao lado,
+**sem conseguir agir fora dele**: sem acesso ao host, à LAN, aos outros
+containers do host ou à internet fora de uma allowlist de domínios.
 
-## Setup inicial (uma vez só)
+## Modelo de segurança
 
-1. Coloque estes 4 arquivos numa pasta separada, **fora** dos seus repositórios
-   de projeto — ex: `~/dev-sandbox/` (não dentro de nenhum projeto específico):
-   ```
-   ~/dev-sandbox/
-   ├── docker-compose.yml
-   ├── Dockerfile
-   ├── init-firewall.sh
-   └── .env.example
-   ```
+```
+internet ◄── egress-proxy (squid, allowlist por domínio, logs) ◄──┐
+                                                                  │ rede "devnet"
+dev-sandbox (sem capabilities, sem sudo, no-new-privileges,       │ (internal: sem gateway,
+             rootfs read-only, limites de CPU/memória/processos) ─┘  sem rota pro host)
+      │
+      └──► mysql / postgres / mongodb / redis / rabbitmq / etcd / keycloak
+           (também só na devnet: sem internet, sem porta no host)
 
-2. Copie `.env.example` para `.env` e ajuste o caminho para a pasta que contém
-   TODOS os seus projetos:
-   ```bash
-   cp .env.example .env
-   # edite .env e defina, por exemplo:
-   # WORKSPACE_DIR=/home/seu-usuario/projects
-   ```
-   Essa pasta deve conter seus projetos como subpastas:
-   ```
-   /home/seu-usuario/projects/
-   ├── projeto-a/
-   ├── projeto-b/
-   └── projeto-c/
-   ```
-
-3. Dê permissão de execução ao firewall e suba o container:
-   ```bash
-   chmod +x init-firewall.sh
-   docker compose up -d --build
-   ```
-   Isso builda a imagem, sobe o container em background, e roda o firewall
-   automaticamente (via `sudo`, restrito só a esse script — o usuário não é
-   root o tempo todo).
-
-4. Autentique (cada dev faz isso uma vez, sessão fica salva no volume —
-   não precisa repetir a cada restart do container):
-   ```bash
-   docker exec -it dev-sandbox bash
-   claude login
-   codex login          # se for usar o Codex
-   gh auth login        # navegador, autoriza a conta GitHub da pessoa
-   gh auth setup-git    # configura o git pra usar essa sessão automaticamente
-   ```
-   **Por que HTTPS/`gh auth login` em vez de SSH:** este workspace é
-   multi-projeto e pensado pra qualquer dev do time subir sem fricção. SSH
-   exigiria gerar uma Deploy Key por repositório (alguém com admin no repo
-   precisa cadastrar cada uma) — não escala bem conforme mais projetos e
-   mais devs entram. `gh auth login` usa a permissão que a pessoa já tem
-   na conta GitHub dela, cobre qualquer repo que ela acessa, e não depende
-   de ninguém cadastrar nada manualmente. Se algum caso específico realmente
-   precisar de SSH com Deploy Key (ex: automação restrita a um repo só),
-   ainda dá pra configurar à parte — mas não é o padrão do template.
-
-## Uso do dia a dia
-
-Entrar no container (já cai em `/workspace`):
-```bash
-docker exec -it dev-sandbox bash
+host 127.0.0.1:18080 / :18672 ──► ui-gateway ──► painéis do Keycloak / RabbitMQ
 ```
 
-Dentro dele, navegue pra qualquer projeto normalmente:
-```bash
-cd /workspace/projeto-a
-claude
-# ou, se quiser rodar sem prompts de permissão:
-claude --dangerously-skip-permissions
-```
+O que isso garante (validado ao subir a stack):
 
-Trocar de projeto é só `cd` — mesmo container, mesmo terminal:
-```bash
-cd /workspace/projeto-b
-claude
-```
+| Tentativa do agente | Resultado |
+|---|---|
+| Virar root / mexer em rede | Sem sudo, `CapEff=0`, `NoNewPrivs=1` |
+| Sair direto pra internet, ignorando o proxy | `Network is unreachable` — a devnet não tem rota |
+| Domínio fora da allowlist, ou IP literal | `403` no proxy (`TCP_DENIED` no log) |
+| DNS externo (exfiltração por DNS) | `SERVFAIL` — o DNS da devnet não resolve nomes externos |
+| Host, LAN, containers do host (`mysql8:3306`, `keycloak-local`...) | Sem rota; pelo proxy, destinos privados são bloqueados |
+| Usar um banco como ponte (`COPY ... TO PROGRAM`, `REPLICAOF`) | Os serviços também estão sem rede externa |
+| Alterar firewall, allowlist ou regras do Claude | Estão em outro container / em `/etc`, dono root, rootfs read-only |
 
-Parar o container quando não estiver usando (opcional — ele fica com
-`restart: unless-stopped`, então sobrevive a reboots se você não parar
-manualmente):
-```bash
-docker compose stop
-```
+**O que continua possível, por natureza** (risco residual, aceite consciente):
 
-Voltar a usar:
-```bash
-docker compose up -d
-docker exec -it dev-sandbox bash
-```
+- Todo domínio liberado é também um canal de saída. Com `github.com` liberado,
+  o agente pode enviar dados para um repositório; com `api.anthropic.com` /
+  `api.openai.com`, para uma conta de LLM. Mantenha a allowlist enxuta.
+- O agente lê tudo que ele usa: tokens em `/run/secrets`, logins dos LLMs,
+  senhas dos bancos. A proteção é o **escopo** de cada credencial, não
+  esconder o valor.
+- O kernel é o do host. Para isolar também o kernel, use gVisor (abaixo).
+- O agente escreve no `WORKSPACE_DIR`, que é uma pasta real do host (próxima
+  seção).
 
-## Usando com VS Code (sem devcontainer.json por projeto)
+## Onde ficam os projetos (`WORKSPACE_DIR`)
 
-Em vez de "Reopen in Container" (que espera um `.devcontainer/` dentro do
-próprio repo), use **attach a um container já rodando**:
+Use um **diretório dedicado ao agente**, com clones próprios dos projetos —
+por exemplo `/opt/agent-workspace` — e **não** um diretório que o host executa
+ou serve.
 
-1. Instale a extensão **Dev Containers**.
-2. `Ctrl+Shift+P` → **Dev Containers: Attach to Running Container...**
-3. Selecione `dev-sandbox` na lista.
-4. Uma nova janela do VS Code abre já dentro do container. Faça
-   **File → Open Folder** e escolha `/workspace/projeto-a` (ou qualquer outro).
+Tudo o que o agente escreve ali vira código no host. Se esse diretório for
+usado por outra coisa, a escrita do agente sai do sandbox por tabela:
 
-Isso te dá terminal integrado, extensões, IntelliSense, tudo rodando dentro
-do container — sem precisar de `.devcontainer/` em cada repositório.
+- **Containers do host que montam a pasta**: hoje `/opt/sites` inteiro é
+  montado com escrita em `juridico`, `comunic-admin-docker`, `comunic-docker`,
+  `nic-static-docker` e `nic-dynamic-docker`. Um arquivo PHP escrito pelo
+  agente em `/opt/sites` roda na hora nesses containers, que têm rede livre.
+- **Coisas que você roda no host**: `docker compose up` de um projeto
+  (o agente pode ter adicionado `privileged` ou o `docker.sock` — e você está
+  no grupo `docker`, equivalente a root), `npm install`/`npm run` (scripts do
+  `package.json`), `.git/hooks`, `.vscode/tasks.json`, `.envrc`.
 
-## O que você ganha e o que perde nesse modelo
+Regras práticas:
 
-**Ganha:**
-- Zero configuração por projeto novo — só clonar dentro de `WORKSPACE_DIR` e
-  já está disponível no container.
-- Um único build, um único container pra manter.
-- Histórico de shell e config do Claude Code persistem entre sessões (via
-  volumes nomeados no compose).
+1. Deixe o agente trabalhar em `/opt/agent-workspace`; traga as mudanças para
+   o resto do mundo **via git** (push de branch + PR revisado por você).
+2. Não rode no host, sem revisar o diff, nada que o agente tenha editado.
+3. Este repositório (`dev-container`) nunca deve ficar dentro do
+   `WORKSPACE_DIR` — senão o agente edita a própria jaula.
+4. O agente pode apagar o que estiver no workspace. Tudo que importa deve
+   estar num remote git.
 
-**Perde (trade-off consciente):**
-- **Isolamento entre projetos.** Todos compartilham o mesmo container, mesma
-  rede, mesmo firewall allowlist. Se um projeto precisa de acesso a um domínio
-  sensível, esse acesso fica disponível pra todos os projetos rodando ali dentro.
-- **Ferramentas globais compartilhadas.** Se dois projetos exigem versões
-  Node/Python globais diferentes, isso pode conflitar. Prefira instalar
-  dependências localmente por projeto (`node_modules`, `venv` dentro de cada
-  pasta) em vez de pacotes globais.
-- **Firewall único.** Você vai precisar manter `init-firewall.sh` atualizado
-  conforme os domínios que os VÁRIOS projetos precisam, não só um.
+## Autenticação do agente
 
-Se em algum momento um projeto específico precisar de isolamento mais forte
-(ex: repositório não confiável, dependências sensíveis), vale rodar esse
-projeto num container à parte, ou até numa VM dedicada, em vez de misturar
-tudo neste sandbox compartilhado.
+| Credencial | Onde fica | Para quê | Pode |
+|---|---|---|---|
+| **Fine-grained PAT** | `secrets/gh_token` → `/run/secrets/gh_token` → gh config | `git clone/fetch/push`, `gh` de leitura | push de branches nos repos escolhidos |
+| **Classic PAT `read:packages`** | `secrets/gh_packages_token` | `npm/pnpm install` de `@nicbrasil` (npm.pkg.github.com) | só baixar pacotes |
+| `claude login` | volume `claude-code-config` | Claude Code | — |
+| `codex login` | volume `codex-config` | Codex | — |
+| Qwen (backend LLM) | `.env` (`OPENAI_*`) ou `~/.qwen/settings.json` (volume) | Qwen Code | — |
+| Senhas dos bancos / Keycloak | `.env` → env vars do sandbox | serviços locais | só na devnet |
 
-## Configurando cada LLM (credenciais e endpoints)
+Nenhum token do GitHub fica em variável de ambiente: o `gh_token` é gravado no
+gh config no boot, e o `gh_packages_token` é injetado pelos wrappers de
+`npm`/`pnpm` só nos subcomandos que baixam pacotes.
 
-Nenhuma credencial fica no `Dockerfile` — ele só instala os binários.
+### 1. Token de push (`secrets/gh_token`) — fine-grained PAT
 
-**Padrão recomendado — login interativo, sessão fica no volume**
-```bash
-docker exec -it dev-sandbox bash
-claude login   # sessão salva no volume claude-code-config
-codex login    # sessão salva no volume codex-config
-```
-A chave nunca fica como variável de ambiente — só num arquivo de config que
-o próprio binário lê, não é herdada por processos filhos.
+Crie em *GitHub → Settings → Developer settings → Fine-grained tokens*:
 
-**Alternativa — `.env`** (mais simples de automatizar, mas expõe a chave
-pra qualquer subprocesso que o agente rodar — veja a seção de segurança
-mais abaixo antes de optar por isso). Se preferir mesmo assim, descomente
-`ANTHROPIC_API_KEY`/`OPENAI_API_KEY` no `.env.example` e adicione de volta
-ao bloco `environment:` do `dev-sandbox` no `docker-compose.yml`.
+- **Resource owner**: a organização dos repositórios (a org precisa permitir
+  fine-grained tokens; pode exigir aprovação de um admin).
+- **Repository access**: *Only select repositories* — só os que o agente vai usar.
+- **Permissions → Repository**:
+  - `Contents`: **Read and write** (clone, fetch, push)
+  - `Metadata`: Read (obrigatório)
+  - `Pull requests`: **No access** (ou *Read-only* se quiser `gh pr view`)
+  - `Workflows`: **No access** — o push de qualquer mudança em
+    `.github/workflows/` é recusado
+  - `Administration`, `Secrets`, `Actions`, `Environments`: **No access**
+- **Expiration**: curta (30–90 dias).
 
-### Claude Code
-Usa `ANTHROPIC_API_KEY` (via `.env`) ou `claude login`. Sem conflito com os
-outros dois.
+### 2. Barreira contra merge: rulesets no GitHub (obrigatório)
 
-### Codex
-Usa `OPENAI_API_KEY` (via `.env`) ou `codex login`. Por padrão fala com a API
-real da OpenAI.
+O token sozinho **não impede merge**: com `Contents: write`, o agente pode
+dar `git merge` local e push na `main`, e não conte com `Pull requests: No
+access` para fechar todo caminho de merge pela API. A barreira real é um
+**ruleset** na branch padrão de cada
+repositório (*Settings → Rules → Rulesets*), alvo `main`/`master`:
 
-### Qwen — cuidado com a colisão de variáveis
-O Qwen Code usa o **mesmo padrão de variáveis** que o Codex (`OPENAI_API_KEY`,
-`OPENAI_BASE_URL`), porque os dois seguem a spec OpenAI-compatible. Setar
-`OPENAI_BASE_URL` global no `docker-compose.yml` quebraria o Codex (ele
-tentaria falar com seu Ollama em vez da OpenAI real).
+- **Restrict updates** — só quem está na lista de bypass atualiza a branch
+  (isso bloqueia push direto *e* merge de PR)
+- **Require a pull request before merging**
+- **Block force pushes** e **Restrict deletions**
+- Opcional: um segundo ruleset para tags (`Restrict creations/updates`), para
+  o agente não criar tag/release que dispare deploy.
 
-Duas formas de evitar o conflito:
+**Atenção à identidade:** o token age como o usuário dono dele. Se esse
+usuário estiver na lista de bypass (ou for admin com bypass), o agente
+também está. O recomendado é uma **conta GitHub dedicada ao agente**
+(machine user) com acesso de escrita aos repositórios e fora do bypass; você
+continua mergeando com a sua conta.
 
-**Opção 1 — flags na hora de rodar (recomendado, não toca em env global):**
-```bash
-qwen --openai-api-key "ollama-local" \
-     --openai-base-url "http://IP-DO-SERVIDOR:11434/v1" \
-     --model "qwen3-coder:30b"
-```
+**CI:** um push do agente dispara os workflows `on: push` com o código dele.
+Não exponha secrets de deploy a workflows que rodam em branches não
+protegidas (use *Environments* com aprovação).
 
-**Opção 2 — `~/.qwen/settings.json`** (persiste no volume `qwen-config`,
-não usa `OPENAI_*` do ambiente, então não colide com o Codex):
-```json
-{
-  "modelProviders": {
-    "ollama-local": {
-      "envKey": "OLLAMA_API_KEY",
-      "baseUrl": "http://IP-DO-SERVIDOR:11434/v1",
-      "id": "qwen3-coder:30b"
-    }
-  }
-}
-```
-E defina `OLLAMA_API_KEY` (nome customizado, não `OPENAI_API_KEY`) só nessa
-sessão ou no `.env`, sem afetar o Codex.
-## GitHub — autenticação sem deixar token em env var
+### 3. Token de pacotes (`secrets/gh_packages_token`) — classic PAT
 
-Em vez de `GITHUB_TOKEN` como variável de ambiente global (que qualquer
-processo filho herda automaticamente), use o `gh` CLI com login interativo,
-uma vez, dentro do container:
+O registry npm do GitHub Packages não aceita fine-grained tokens. Crie um
+*classic* token só com o escopo **`read:packages`** (nada de `repo`). O
+`.npmrc` dos projetos continua igual:
 
-```bash
-docker exec -it dev-sandbox bash
-gh auth login
-gh auth setup-git   # configura o git pra usar a sessão do gh automaticamente
-```
-
-A sessão fica salva no volume `gh-config`, persiste entre restarts do
-container. Depois disso, `git clone`, `git push`, `gh pr create`, etc.
-funcionam sem token nenhum exposto como env var — a credencial só é lida
-pelo próprio `gh`/`git` quando necessário, não fica visível pra todo
-processo filho que o agente rodar.
-
-**Se preferir a conveniência do token em env var mesmo assim** (ex: scripts
-automatizados que não conseguem fazer login interativo), o `.env.example`
-ainda tem `GITHUB_TOKEN` comentado como opção — mas saiba que isso volta a
-expor o valor pra qualquer subprocesso.
-
-### Pacotes privados do GitHub Packages (`@nicbrasil` e outros escopos)
-
-Diferente de `git`/`gh`, o **npm/pnpm não sabe usar a sessão do `gh`**
-sozinho — ele precisa de um token no `.npmrc` do projeto:
 ```
 @nicbrasil:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
-Em vez de manter `GITHUB_TOKEN` como env var permanente só pra isso, o
-`.bashrc` do container já tem uma função que injeta o token **só durante o
-`pnpm install`**, puxando ele da sessão do `gh` já autenticada:
+
+### 4. Camada extra no Claude Code
+
+`/etc/claude-code/managed-settings.json` (dentro da imagem, dono root) nega
+`gh pr create`, `gh pr merge`, `gh repo create/delete`, `gh secret`,
+`gh workflow` e `gh release create`. É só defesa em profundidade: vale para o
+Claude Code, não para Codex/Qwen nem para outras formas de chamar a API. A
+barreira real são os itens 1 e 2.
+
+## Pré-requisitos (no host)
+
+Antes de subir, tenha no host:
+
+- **Docker Engine + Docker Compose v2** — confira com `docker compose version`.
+- **Um clone do `nicrobots-prompts`** — é a fonte ÚNICA de diretrizes e skills
+  dos agentes. Clone em qualquer lugar do host e anote o caminho absoluto (vai
+  em `NICROBOTS_DIR` no `.env`):
+  ```bash
+  git clone https://github.com/<org>/nicrobots-prompts.git /opt/nicrobots-prompts
+  ```
+- **Um diretório dedicado ao agente** para os projetos (`WORKSPACE_DIR`), fora
+  de qualquer pasta que o host execute ou sirva — ver "Onde ficam os projetos".
+- **Tokens do GitHub e contas dos LLMs** — ver "Autenticação do agente". Dá
+  para subir sem eles (o GitHub fica sem auth e você loga nos LLMs depois).
+- **(Opcional) IPv6 no daemon do host** — necessário só se o *agente* for
+  buildar imagens base do harbor NIC (`harbor.adm.devsys.nic.br`, IPv6-only). O
+  dev-container em si não precisa: a imagem base dele vem do Docker Hub.
+
+## Setup inicial (passo a passo)
+
+1. **Prepare o workspace** e clone nele os projetos em que o agente vai mexer:
+   ```bash
+   sudo mkdir -p /opt/agent-workspace && sudo chown "$(id -u):$(id -g)" /opt/agent-workspace
+   git clone https://github.com/<org>/<projeto>.git /opt/agent-workspace/<projeto>
+   ```
+2. **Crie o `.env`** a partir do modelo:
+   ```bash
+   cp .env.example .env
+   ```
+   Preencha no mínimo (o compose recusa subir sem as obrigatórias):
+   - `WORKSPACE_DIR` — o diretório do passo 1 (ex.: `/opt/agent-workspace`)
+   - `NICROBOTS_DIR` — o clone do nicrobots-prompts (ver pré-requisitos)
+   - `HOST_UID` / `HOST_GID` — saída de `id -u` e `id -g`
+   - `GIT_USER_NAME` / `GIT_USER_EMAIL` — identidade dos commits do agente
+   - Senhas dos serviços — gere cada uma com `openssl rand -hex 16`
+   - (Opcional) `COMPOSE_PROFILES=db,auth` para já subir bancos + Keycloak
+   - (Opcional) backend do Qwen — ver seção "Qwen"
+3. **Crie os secrets do GitHub** (podem ficar vazios; aí o GitHub fica sem auth
+   e você preenche depois):
+   ```bash
+   umask 077
+   printf '%s' 'github_pat_...' > secrets/gh_token          # fine-grained PAT (push)
+   printf '%s' 'ghp_...'        > secrets/gh_packages_token  # classic PAT (read:packages)
+   ```
+4. **Suba a stack** e confira o boot:
+   ```bash
+   docker compose up -d --build
+   docker compose logs dev-sandbox   # espere "GitHub auth configurado..." e "Skills nicrobots ligadas (N)."
+   ```
+5. **Faça login nos LLMs** (uma vez; fica nos volumes):
+   ```bash
+   docker exec -it dev-sandbox bash
+   claude login      # e/ou: codex login
+   ```
+6. **Configure os rulesets no GitHub** (ver "Autenticação do agente", item 2) —
+   é a barreira real contra merge/push direto na branch protegida.
+
+> **Subiu com erro `defina X no .env`?** Falta uma variável obrigatória (as mais
+> esquecidas: `NICROBOTS_DIR`, `HOST_UID/GID`). Preencha e rode
+> `docker compose up -d` de novo.
+
+## Uso do dia a dia
+
 ```bash
-pnpm install   # já funciona normal, o token é injetado e descartado automaticamente
+docker exec -it dev-sandbox bash     # já cai em /workspace
+cd /workspace/projeto-a
+claude --dangerously-skip-permissions
 ```
-Depois que o `pnpm install` termina, a env var não existe mais na sessão —
-só existiu durante aquele processo específico. Pra conferir que funcionou:
+
+Parar / voltar:
 ```bash
-type pnpm   # deve mostrar que "pnpm" é uma função, não o binário direto
+docker compose stop
+docker compose up -d
 ```
 
-## Bancos de dados e autenticação (MySQL, MongoDB, etcd, Keycloak)
+Instalações do agente: sem root, ele não instala pacotes de sistema. `npm i -g`,
+`pnpm add -g`, `pip` em venv e binários em `~/.local/bin` funcionam (ficam no
+volume `sandbox-home`). Ferramenta de sistema que faltar: adicione no
+`sandbox/Dockerfile` e rebuilde.
 
-Esses serviços vêm no mesmo `docker-compose.yml`, atrás de **profiles**
-(`db` e `auth`). Duas formas de trabalhar com isso:
+## Liberando domínios
 
-### Opção 1 — `--profile` manual
+A allowlist fica em `proxy/allowlist.txt` (neste repositório, fora do alcance
+do agente). Para ver o que foi bloqueado:
+
+```bash
+docker logs -f dev-egress-proxy | grep TCP_DENIED
+```
+
+Adicione o domínio (`api.exemplo.com`, ou `.exemplo.com` para incluir
+subdomínios) e reinicie só o proxy:
+
+```bash
+docker compose restart egress-proxy
+```
+
+O que respeita o proxy automaticamente: curl, git, gh, npm, pnpm/corepack,
+pip, Claude Code, Codex e o `fetch` do Node (`NODE_USE_ENV_PROXY=1`).
+Ferramentas que ignoram `HTTPS_PROXY` (ex: Maven/Gradle sem config de proxy,
+alguns SDKs) simplesmente não saem — configure o proxy nelas
+(`egress-proxy:3128`).
+
+## Bancos e Keycloak
+
+Atrás de profiles (`db` e `auth`):
+
 ```bash
 docker compose --profile db --profile auth up -d
+# ou COMPOSE_PROFILES=db,auth no .env
 ```
-Fica explícito toda vez que você sobe o ambiente, mas exige lembrar da flag.
 
-### Opção 2 — `COMPOSE_PROFILES` no `.env` (recomendado se você quase
-sempre usa os bancos)
-Descomente no `.env`:
-```bash
-COMPOSE_PROFILES=db,auth
-```
-A partir daí, `docker compose up -d` sozinho já sobe tudo — dev-sandbox,
-bancos e Keycloak — sem precisar da flag. É a mesma mecânica dos profiles
-por baixo, só muda o padrão.
-
-### Qual usar?
-
-- **Se o dia a dia envolve banco quase sempre** (a maioria dos projetos
-  NestJS/TypeORM vai precisar de MySQL, por exemplo): vale usar
-  `COMPOSE_PROFILES` no `.env` — menos fricção, `docker compose up -d`
-  já faz tudo.
-- **Se você alterna bastante entre "só código" e "código + infra"**
-  (ex: trabalha em scripts/libs isolados boa parte do tempo, só sobe banco
-  quando for testar integração): fica melhor deixar sem `COMPOSE_PROFILES`
-  e usar `--profile` manual quando precisar — evita ter bancos pesados
-  rodando à toa consumindo RAM/CPU da máquina.
-
-Dá pra misturar também: deixar `COMPOSE_PROFILES=db` fixo (bancos sempre
-ativos) e usar `--profile auth` manual só quando for mexer com login/token
-via Keycloak, por exemplo.
-
-Todos ficam numa rede Docker interna (`devnet`, subnet `172.28.0.0/24`) junto
-com o `dev-sandbox`. O agente acessa **pelo nome do serviço**, sem precisar
-descobrir IP nem abrir porta no host:
-
-| Serviço | Host (de dentro do dev-sandbox) | Credenciais (`.env`) |
+| Serviço | Host (de dentro do dev-sandbox) | Variáveis prontas |
 |---|---|---|
-| MySQL | `mysql:3306` | `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` |
-| PostgreSQL | `postgres:5432` | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` (ou use `$DATABASE_URL` já pronta) |
-| MongoDB | `mongodb:27017` | `MONGO_ROOT_USER` / `MONGO_ROOT_PASSWORD` (ou use `$MONGO_URI` já pronta) |
-| Redis | `redis:6379` | `REDIS_PASSWORD` (ou use `$REDIS_URL` já pronta) |
-| RabbitMQ | `rabbitmq:5672` (painel: `localhost:15672`) | `RABBITMQ_USER` / `RABBITMQ_PASSWORD` (ou use `$RABBITMQ_URL` já pronta) |
-| etcd | `etcd:2379` | sem auth (dev only — `ALLOW_NONE_AUTHENTICATION`) |
-| Keycloak | `keycloak:8080` | `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` (banco próprio, separado do Postgres geral) |
+| MySQL | `mysql:3306` | `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE` |
+| PostgreSQL | `postgres:5432` | `DATABASE_URL`, `POSTGRES_*` |
+| MongoDB | `mongodb:27017` | `MONGO_URI` |
+| Redis | `redis:6379` | `REDIS_URL` |
+| RabbitMQ | `rabbitmq:5672` | `RABBITMQ_URL` |
+| etcd | `etcd:2379` | `ETCD_ENDPOINTS` (sem auth, dev only) |
+| Keycloak | `keycloak:8080` | `KEYCLOAK_URL`, `KEYCLOAK_ADMIN*` |
 
-Essas variáveis já são injetadas automaticamente no ambiente do `dev-sandbox`
-(veja a seção `environment` do serviço no compose) — o agente pode simplesmente
-ler `$MYSQL_HOST`, `$MONGO_URI`, `$KEYCLOAK_URL`, etc. em vez de você precisar
-falar o endereço toda vez que pedir uma tarefa.
+Painéis no navegador do host (só `127.0.0.1`, portas configuráveis no `.env`):
 
-Exemplo de prompt pro agente:
-> "Conecte no MySQL usando as variáveis de ambiente MYSQL_HOST/USER/PASSWORD
-> e crie a tabela X"
+- Keycloak: http://localhost:18080
+- RabbitMQ: http://localhost:18672
 
-**Por que essa é a abordagem certa** (em vez de instalar esses serviços
-direto no host ou no próprio container do dev-sandbox):
-- Isolamento: cada serviço no seu próprio container, com sua própria imagem
-  oficial, sem poluir o ambiente de desenvolvimento.
-- Dados persistem em volumes nomeados (`mysql-data`, `mongo-data`, etc.),
-  sobrevivem a rebuild do dev-sandbox.
-- Não passa pelo firewall de egress público — é tráfego interno Docker,
-  só precisei liberar o subnet `172.28.0.0/24` no `init-firewall.sh`.
-- `profiles` evita rodar bancos pesados quando você só quer codar sem eles.
+Os bancos não têm porta no host de propósito. O Keycloak em `start-dev` é só
+para desenvolvimento local.
 
-**Keycloak em modo dev**: o `start-dev` é só pra desenvolvimento local —
-não use essa config em produção (roda sem HTTPS, sem cluster). Se seu
-projeto realmente precisa reproduzir produção, ajuste as env vars `KC_*`
-conforme a documentação oficial do Keycloak.
+## VS Code
 
-Pra derrubar só os bancos, mantendo o dev-sandbox rodando:
-```bash
-docker compose --profile db --profile auth down
-# (se estiver usando COMPOSE_PROFILES no .env, o "--profile" aqui é opcional)
+*Dev Containers: Attach to Running Container…* → `dev-sandbox` funciona, mas o
+VS Code cria um canal entre o container e o host que não foi feito para
+resistir a um container malicioso. Antes de anexar, desligue no VS Code do
+host:
+
+```json
+{
+  "dev.containers.copyGitConfig": false,
+  "dev.containers.gitCredentialHelperConfigLocation": "none",
+  "remote.autoForwardPorts": false
+}
 ```
 
-## Permissão negada (EACCES) ao instalar dependências
+e não tenha um `ssh-agent` com chaves carregado (ele é repassado ao
+container). Confira dentro do container: `echo $SSH_AUTH_SOCK` deve estar
+vazio. Para máximo isolamento, use só o terminal (`docker exec`).
 
-Resolvido em duas camadas, funcionando juntas:
+## Qwen
 
-**1. Defesa principal — `HOST_UID`/`HOST_GID` no `.env`**
-Se você alinhar esses valores com seu usuário real do host (`id -u` / `id -g`),
-qualquer projeto que você clonar/criar normalmente já nasce pertencendo ao
-UID certo — dentro do container isso já *é* o `node`, porque o UID bate.
-Sem script, sem boot-time fix, é assim que deveria funcionar por padrão.
+O Qwen Code fala com qualquer backend **compatível com a API da OpenAI**, pelas
+variáveis `OPENAI_API_KEY`, `OPENAI_BASE_URL` e `OPENAI_MODEL` (as mesmas do
+Codex — se usar os dois, não as compartilhe sem querer). Configure no `.env` e o
+compose as repassa ao dev-sandbox; aplique com `docker compose up -d dev-sandbox`.
 
-**2. Rede de segurança — `fix-permissions.sh` no boot**
-Cobre os casos que fogem da defesa principal: projeto clonado com `sudo`,
-copiado de outra máquina, extraído de um `.zip` que preservou UID de outro
-lugar, etc. Ele roda como root (sudo restrito) uma vez a cada boot do
-container e faz o `node` virar **dono de verdade** de tudo em `/workspace`:
+**Gateway interno (ex.: Bifrost NIC)** — recomendado:
+
 ```bash
-find /workspace -xdev \( ! -user node -o ! -group node \) -exec chown node:node {} +
-```
-Só toca no que está com dono errado (não refaz o que já está certo), então
-fica rápido nos boots depois do primeiro.
-
-**Por que ownership de verdade (`chown`) em vez de ACL:** já que este é um
-workspace pessoal seu, onde tudo que está ali é seu pra usar via `node`, não
-faz muito sentido preservar a ownership original de quem criou o arquivo —
-o ideal é o `node` simplesmente ser o dono, ponto. Isso também deixa
-`ls -l` e outras ferramentas mostrando ownership consistente, em vez de
-uma mistura de ACL por cima de dono "errado".
-
-Pra conferir que funcionou:
-```bash
-docker exec -it dev-sandbox bash
-ls -ln /workspace/nome-do-projeto | head   # dono deve aparecer como 1000
+# no .env
+OPENAI_API_KEY=<sua-chave>
+OPENAI_BASE_URL=https://bifrost.gateway.homologacao.devsys.nic.br/v1
+OPENAI_MODEL=skynet/qwen3.8-flash-next:125b-a6b-q4_K_M
 ```
 
+Três detalhes que evitam os erros mais comuns:
 
+1. **Libere o domínio do gateway na allowlist** (`proxy/allowlist.txt` +
+   `docker compose restart egress-proxy`) — senão o proxy bloqueia a saída.
+2. **O `OPENAI_BASE_URL` precisa terminar em `/v1`** — sem isso o gateway
+   responde `405 Method Not Allowed`.
+3. **Use o ID exato do modelo** que o gateway expõe, com prefixos e tudo (ex.:
+   `skynet/...`). Liste os disponíveis com:
+   ```bash
+   docker exec -u node dev-sandbox bash -lc \
+     'curl -s -H "Authorization: Bearer $OPENAI_API_KEY" "$OPENAI_BASE_URL/models"'
+   ```
+
+**Ollama numa máquina da rede** — alternativa: defina `OLLAMA_HOST` (IPv4) e
+`OLLAMA_PORT` no `.env` (o proxy libera só esse destino) e aponte o Qwen para
+ele com as mesmas `OPENAI_*` (`OPENAI_BASE_URL=http://IP:11434/v1`) ou por
+`~/.qwen/settings.json` (volume `qwen-config`) com `modelProviders`.
+
+## Isolamento de kernel com gVisor (opcional, recomendado)
+
+O container compartilha o kernel do host; uma falha de kernel é o caminho
+restante de fuga. O gVisor intercepta as syscalls do container:
 
 ```bash
-docker exec -it dev-sandbox bash
-sudo iptables -L -v -n
-nslookup dominio-que-falhou.com
+# no host — https://gvisor.dev/docs/user_guide/install/
+sudo runsc install && sudo systemctl restart docker
+# no .env
+SANDBOX_RUNTIME=runsc
+docker compose up -d --force-recreate dev-sandbox
 ```
 
-Adicione o domínio faltante em `init-firewall.sh` no host, depois:
+## Permissões de arquivo (EACCES)
+
+`HOST_UID`/`HOST_GID` alinham o usuário `node` do container com o seu usuário
+do host. Como rede de segurança, o serviço one-shot `workspace-perms` roda
+antes do sandbox e passa para esse UID/GID tudo em `WORKSPACE_DIR` com dono
+diferente (sem seguir symlinks). Ele roda como root só com `CAP_CHOWN` e
+`CAP_DAC_READ_SEARCH`, sem rede, e sai — o agente não tem acesso a ele.
+
+## Atualizando os CLIs
+
+As versões ficam fixas em `sandbox/Dockerfile` (`CLAUDE_CODE_VERSION`,
+`CODEX_VERSION`, `QWEN_CODE_VERSION`). Para atualizar:
+
 ```bash
-docker compose up -d --build   # rebuilda com o script atualizado
+npm view @anthropic-ai/claude-code version
+# edite o ARG e:
+docker compose build dev-sandbox && docker compose up -d dev-sandbox
 ```

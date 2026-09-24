@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge *)",
+      "Bash(gh repo create *)",
+      "Bash(gh repo delete *)",
+      "Bash(gh secret *)",
+      "Bash(gh workflow *)",
+      "Bash(gh release create *)"
+    ]
+  }
+}

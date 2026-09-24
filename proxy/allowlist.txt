@@ -1,0 +1,90 @@
+# Domínios que o dev-sandbox pode acessar (via egress-proxy).
+# Um por linha. "exemplo.com" casa só o domínio exato; ".exemplo.com" casa o
+# domínio e todos os subdomínios. Não repita um domínio já coberto por uma
+# entrada com ponto (o squid recusa a duplicata).
+#
+# Depois de editar: docker compose restart egress-proxy
+# Bloqueios aparecem como TCP_DENIED em: docker logs -f dev-egress-proxy
+#
+# Todo domínio aqui é também um canal por onde o agente pode enviar dados.
+# Libere só o necessário.
+
+# --- Anthropic / Claude Code ---
+api.anthropic.com
+console.anthropic.com
+claude.ai
+claude.com
+platform.claude.com
+
+# --- OpenAI / Codex ---
+api.openai.com
+auth.openai.com
+chatgpt.com
+
+# --- Qwen Code ---
+dashscope.aliyuncs.com
+chat.qwen.ai
+
+# --- Gateway LLM interno da NIC (Bifrost) ---
+bifrost.gateway.homologacao.devsys.nic.br
+
+# --- Docker (pull de imagens-base no build/run via docker-rootless) ---
+.docker.io
+.docker.com
+harbor.adm.devsys.nic.br
+
+# --- GitHub (git, gh, GitHub Packages) ---
+github.com
+api.github.com
+codeload.github.com
+npm.pkg.github.com
+.githubusercontent.com
+
+# --- Node / npm / pnpm / yarn ---
+registry.npmjs.org
+registry.yarnpkg.com
+repo.yarnpkg.com
+nodejs.org
+
+# --- Prisma (engines baixadas no generate) ---
+binaries.prisma.sh
+
+# --- Python ---
+pypi.org
+files.pythonhosted.org
+
+# --- Go ---
+proxy.golang.org
+sum.golang.org
+
+# --- Rust / Cargo ---
+crates.io
+static.crates.io
+index.crates.io
+
+# --- Java / Maven / Gradle ---
+repo.maven.apache.org
+repo1.maven.org
+plugins.gradle.org
+services.gradle.org
+downloads.gradle.org
+
+# --- Ruby ---
+rubygems.org
+index.rubygems.org
+
+# --- PHP / Composer ---
+repo.packagist.org
+getcomposer.org
+
+# --- .NET / NuGet ---
+api.nuget.org
+
+# --- VS Code (servidor e extensões ao anexar no container) ---
+update.code.visualstudio.com
+vscode.download.prss.microsoft.com
+marketplace.visualstudio.com
+.gallerycdn.vsassets.io
+
+# --- Adicione aqui domínios usados pelos seus projetos ---
+# api.servico-externo.com.br

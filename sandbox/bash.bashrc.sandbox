@@ -1,0 +1,9 @@
+
+# --- dev-sandbox ---
+# Histórico persistente (volume dev-bash-history)
+export HISTFILE=/commandhistory/.bash_history
+PROMPT_COMMAND="history -a${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+# Ao entrar pelo "docker exec", começa no workspace
+if [ "$PWD" = "$HOME" ] || [ "$PWD" = "/" ]; then
+    cd /workspace 2>/dev/null
+fi
