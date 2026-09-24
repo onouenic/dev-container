@@ -120,9 +120,10 @@ repositório (*Settings → Rules → Rulesets*), alvo `main`/`master`:
 
 **Atenção à identidade:** o token age como o usuário dono dele. Se esse
 usuário estiver na lista de bypass (ou for admin com bypass), o agente
-também está. O recomendado é uma **conta GitHub dedicada ao agente**
-(machine user) com acesso de escrita aos repositórios e fora do bypass; você
-continua mergeando com a sua conta.
+também está — garanta que o dono do token fique **fora** do bypass do ruleset.
+Você pode usar sua própria conta ou, se quiser separar a identidade do agente
+da sua, uma **conta dedicada** (machine user) com escrita nos repositórios;
+nos dois casos o merge continua sendo feito por quem está no bypass.
 
 **CI:** um push do agente dispara os workflows `on: push` com o código dele.
 Não exponha secrets de deploy a workflows que rodam em branches não
@@ -330,10 +331,12 @@ Três detalhes que evitam os erros mais comuns:
 ele com as mesmas `OPENAI_*` (`OPENAI_BASE_URL=http://IP:11434/v1`) ou por
 `~/.qwen/settings.json` (volume `qwen-config`) com `modelProviders`.
 
-## Isolamento de kernel com gVisor (opcional, recomendado)
+## Isolamento de kernel com gVisor (opcional)
 
-O container compartilha o kernel do host; uma falha de kernel é o caminho
-restante de fuga. O gVisor intercepta as syscalls do container:
+O sandbox roda com o runtime padrão do Docker (`runc`), compartilhando o
+kernel do host — uma falha de kernel seria o caminho restante de fuga. Se
+quiser fechar também essa brecha, dá para trocar o runtime pelo gVisor, que
+intercepta as syscalls do container:
 
 ```bash
 # no host — https://gvisor.dev/docs/user_guide/install/
