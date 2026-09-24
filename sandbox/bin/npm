@@ -1,0 +1,19 @@
+#!/bin/sh
+# Wrapper do npm: injeta GITHUB_TOKEN (token só de leitura do GitHub
+# Packages, secret gh_packages_token) apenas nos subcomandos que baixam
+# pacotes, para o .npmrc dos projetos autenticar em npm.pkg.github.com
+# (@nicbrasil). Nos demais subcomandos (run, test, exec, publish...) o token não é
+# exportado.
+TOKEN_FILE=/run/secrets/gh_packages_token
+REAL=/usr/local/bin/npm
+
+case "${1:-}" in
+    install|i|ci|add|update|up|upgrade|outdated|view|info)
+        if [ -z "${GITHUB_TOKEN:-}" ] && [ -s "$TOKEN_FILE" ]; then
+            GITHUB_TOKEN=$(tr -d '[:space:]' < "$TOKEN_FILE")
+            export GITHUB_TOKEN
+        fi
+        ;;
+esac
+
+exec "$REAL" "$@"
