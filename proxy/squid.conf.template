@@ -1,5 +1,6 @@
 # Gerado pelo entrypoint.sh a partir deste template — não edite em runtime.
-# Para liberar domínios, edite allowlist.txt e reinicie o egress-proxy.
+# Para liberar domínios, edite allowlist.txt (versionada) ou
+# allowlist.local.txt (só deste host, fora do git) e reinicie o egress-proxy.
 
 http_port 3128
 
@@ -26,7 +27,8 @@ acl Safe_ports port 80 443
 
 # -n: casa só pelo nome pedido, sem DNS reverso. Pedido para IP literal
 # (ex: CONNECT 1.2.3.4:443) nunca casa com a allowlist.
-acl allowlist dstdomain -n "/etc/squid/allowlist.txt"
+acl allowlist dstdomain -n "/etc/squid/allowlists/allowlist.txt"
+@ALLOWLIST_LOCAL@
 
 # Destinos internos/privados: bloqueados mesmo que um domínio liberado
 # resolva para eles (DNS rebinding, host, LAN, metadata de cloud).

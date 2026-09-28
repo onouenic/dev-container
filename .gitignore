@@ -1,3 +1,4 @@
 .env
+proxy/allowlist.local.txt
 secrets/*
 !secrets/.gitkeep

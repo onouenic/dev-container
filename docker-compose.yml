@@ -186,8 +186,9 @@ services:
   # ---------------------------------------------------------------------
   # Proxy de saída: único caminho do sandbox para a internet. Fica em duas
   # redes (devnet + egress) e libera só os domínios de proxy/allowlist.txt.
-  # O agente não consegue alterá-lo: roda em outro container e o arquivo de
-  # allowlist fica neste repositório, fora do WORKSPACE_DIR.
+  # O agente não consegue alterá-lo: roda em outro container e as allowlists
+  # ficam neste repositório, fora do WORKSPACE_DIR. allowlist.local.txt
+  # (opcional, fora do git) guarda os domínios internos deste host.
   # ---------------------------------------------------------------------
   egress-proxy:
     build:
@@ -203,7 +204,9 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=64m
     volumes:
-      - ./proxy/allowlist.txt:/etc/squid/allowlist.txt:ro
+      # Diretório inteiro (read-only): allowlist.local.txt é opcional, e montar
+      # um arquivo inexistente faria o Docker criar um diretório no lugar.
+      - ./proxy:/etc/squid/allowlists:ro
     environment:
       - SANDBOX_SUBNET=${SANDBOX_SUBNET:-172.28.0.0/24}
       # Servidor Ollama / LLM local na rede (IPv4). Liberado só nessa porta.
@@ -435,8 +438,8 @@ networks:
         # a subir rouba o .2 e o proxy falha com "Address already in use".
         - subnet: ${SANDBOX_SUBNET:-172.28.0.0/24}
           ip_range: ${SANDBOX_DYNAMIC_RANGE:-172.28.0.128/25}
-  # Saída do egress-proxy para a internet. IPv6 ligado: alguns destinos do
-  # NIC.br (ex.: harbor.adm.devsys.nic.br) só têm endereço IPv6. Requer que o
+  # Saída do egress-proxy para a internet. IPv6 ligado: alguns destinos
+  # internos (ex.: registry privado) só têm endereço IPv6. Requer que o
   # daemon do host tenha IPv6 habilitado (ipv6+ip6tables). A devnet segue sem
   # IPv6 de propósito: só o proxy sai, os containers internos não.
   egress:

@@ -8,6 +8,8 @@ SANDBOX_SUBNET="${SANDBOX_SUBNET:?SANDBOX_SUBNET não definido}"
 OLLAMA_HOST="${OLLAMA_HOST:-}"
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 CONF=/tmp/squid.conf
+ALLOWLIST_DIR=/etc/squid/allowlists
+LOCAL_ALLOWLIST="$ALLOWLIST_DIR/allowlist.local.txt"
 
 ipv4_re='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
 cidr_re='^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
@@ -30,12 +32,20 @@ http_access allow sandbox ollama_dst ollama_port !CONNECT"
     echo "Liberando LLM local: http://$OLLAMA_HOST:$OLLAMA_PORT"
 fi
 
-awk -v subnet="$SANDBOX_SUBNET" -v ollama="$OLLAMA_RULES" '
+# Allowlist local (opcional, fora do git): domínios internos deste host.
+LOCAL_RULES="# allowlist.local.txt ausente: só a allowlist versionada"
+if [ -f "$LOCAL_ALLOWLIST" ]; then
+    LOCAL_RULES="acl allowlist dstdomain -n \"$LOCAL_ALLOWLIST\""
+    echo "Allowlist local carregada: $LOCAL_ALLOWLIST"
+fi
+
+awk -v subnet="$SANDBOX_SUBNET" -v ollama="$OLLAMA_RULES" -v local_rules="$LOCAL_RULES" '
     { gsub(/@SANDBOX_SUBNET@/, subnet) }
     /@OLLAMA_RULES@/ { print ollama; next }
+    /@ALLOWLIST_LOCAL@/ { print local_rules; next }
     { print }
 ' /etc/squid/squid.conf.template > "$CONF"
 
 squid -k parse -f "$CONF"
-echo "Egress proxy pronto. Domínios liberados: /etc/squid/allowlist.txt"
+echo "Egress proxy pronto. Domínios liberados: $ALLOWLIST_DIR/allowlist*.txt"
 exec squid -N -f "$CONF"

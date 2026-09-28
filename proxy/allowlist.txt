@@ -3,6 +3,10 @@
 # domínio e todos os subdomínios. Não repita um domínio já coberto por uma
 # entrada com ponto (o squid recusa a duplicata).
 #
+# Domínios internos ou específicos deste host (registry privado, gateway LLM
+# da empresa etc.) vão em allowlist.local.txt, que fica FORA do git (ver
+# allowlist.local.txt.example). Mesmo formato, e não repita entre os dois.
+#
 # Depois de editar: docker compose restart egress-proxy
 # Bloqueios aparecem como TCP_DENIED em: docker logs -f dev-egress-proxy
 #
@@ -26,13 +30,12 @@ dashscope.aliyuncs.com
 chat.qwen.ai
 
 # --- Gateway LLM compatível com OpenAI (Qwen/Codex), se usar ---
-# Adicione aqui o domínio do seu gateway (ver README, seção "Qwen"):
-# seu-gateway.exemplo.com
+# Coloque o domínio do seu gateway em allowlist.local.txt (ver README, "Qwen").
 
 # --- Docker (pull de imagens-base no build/run via docker-rootless) ---
 .docker.io
 .docker.com
-harbor.adm.devsys.nic.br
+# Registry privado da empresa: em allowlist.local.txt.
 
 # --- GitHub (git, gh, GitHub Packages) ---
 github.com

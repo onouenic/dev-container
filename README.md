@@ -180,7 +180,7 @@ Antes de subir, tenha no host:
 - **Tokens do GitHub e contas dos LLMs** — ver "Autenticação do agente". Dá
   para subir sem eles (o GitHub fica sem auth e você loga nos LLMs depois).
 - **(Opcional) IPv6 no daemon do host** — necessário só se o *agente* for
-  buildar imagens base do harbor NIC (`harbor.adm.devsys.nic.br`, IPv6-only). O
+  buildar imagens base de um registry privado só com IPv6. O
   dev-container em si não precisa: a imagem base dele vem do Docker Hub.
 
 ## Setup inicial (passo a passo)
@@ -248,7 +248,10 @@ volume `sandbox-home`). Ferramenta de sistema que faltar: adicione no
 ## Liberando domínios
 
 A allowlist fica em `proxy/allowlist.txt` (neste repositório, fora do alcance
-do agente). Para ver o que foi bloqueado:
+do agente). Domínios internos ou específicos do seu host (registry privado,
+gateway LLM da empresa) vão em `proxy/allowlist.local.txt`, que fica fora do
+git: copie de `proxy/allowlist.local.txt.example`. Mesmo formato; o arquivo é
+opcional e não deve repetir domínios da allowlist versionada. Para ver o que foi bloqueado:
 
 ```bash
 docker logs -f dev-egress-proxy | grep TCP_DENIED
@@ -331,7 +334,7 @@ OPENAI_MODEL=<id-do-modelo>
 
 Três detalhes que evitam os erros mais comuns:
 
-1. **Libere o domínio do gateway na allowlist** (`proxy/allowlist.txt` +
+1. **Libere o domínio do gateway na allowlist local** (`proxy/allowlist.local.txt` +
    `docker compose restart egress-proxy`) — senão o proxy bloqueia a saída.
 2. **O `OPENAI_BASE_URL` precisa terminar em `/v1`** — sem isso o gateway
    responde `405 Method Not Allowed`.

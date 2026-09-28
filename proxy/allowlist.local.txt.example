@@ -1,0 +1,16 @@
+# Allowlist LOCAL do egress-proxy: domínios só deste host, que não devem ir
+# para o git (registry privado, gateway LLM interno etc.).
+#
+#   cp proxy/allowlist.local.txt.example proxy/allowlist.local.txt
+#
+# Mesmo formato da allowlist.txt: um domínio por linha; ".exemplo.com" inclui
+# subdomínios. Não repita um domínio que já esteja na allowlist.txt.
+# O arquivo é opcional: sem ele, vale só a allowlist versionada.
+#
+# Depois de editar: docker compose restart egress-proxy
+
+# Registry privado de imagens (pull de imagens-base no build/run)
+# registry.exemplo.com
+
+# Gateway LLM compatível com OpenAI (Qwen/Codex)
+# llm-gateway.exemplo.com
