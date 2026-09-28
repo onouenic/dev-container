@@ -50,6 +50,9 @@ registry.yarnpkg.com
 repo.yarnpkg.com
 nodejs.org
 
+# --- ClamAV (assinaturas baixadas pelo freshclam do serviço clamav) ---
+database.clamav.net
+
 # --- Prisma (engines baixadas no generate) ---
 binaries.prisma.sh
 

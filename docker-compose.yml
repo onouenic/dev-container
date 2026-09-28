@@ -5,9 +5,10 @@
 #                                                         │ rede "devnet" (internal: sem gateway,
 #   dev-sandbox ──────────────────────────────────────────┘  sem internet, sem acesso ao host)
 #        │
-#        └──► mysql / postgres / mongodb / redis / rabbitmq / etcd / keycloak (também só na devnet)
+#        └──► mysql / postgres / mongodb / redis / rabbitmq / etcd / keycloak / minio / clamav
+#             (também só na devnet)
 #
-#   host 127.0.0.1 ──► ui-gateway (rede "publish" + devnet) ──► painéis do Keycloak e RabbitMQ
+#   host 127.0.0.1 ──► ui-gateway (rede "publish" + devnet) ──► painéis do Keycloak, RabbitMQ e MinIO
 
 # Endurecimento aplicado a todos os serviços de apoio.
 x-service-hardening: &service-hardening
@@ -94,8 +95,8 @@ services:
       - HTTPS_PROXY=http://egress-proxy:3128
       - http_proxy=http://egress-proxy:3128
       - https_proxy=http://egress-proxy:3128
-      - NO_PROXY=localhost,127.0.0.1,::1,mysql,postgres,mongodb,redis,rabbitmq,etcd,keycloak,keycloak-db,docker-engine
-      - no_proxy=localhost,127.0.0.1,::1,mysql,postgres,mongodb,redis,rabbitmq,etcd,keycloak,keycloak-db,docker-engine
+      - NO_PROXY=localhost,127.0.0.1,::1,mysql,postgres,mongodb,redis,rabbitmq,etcd,keycloak,keycloak-db,docker-engine,minio,clamav
+      - no_proxy=localhost,127.0.0.1,::1,mysql,postgres,mongodb,redis,rabbitmq,etcd,keycloak,keycloak-db,docker-engine,minio,clamav
       # Faz o fetch nativo do Node (corepack, apps) respeitar o HTTPS_PROXY.
       - NODE_USE_ENV_PROXY=1
       # Docker: o CLI do sandbox fala com o daemon do sidecar docker-engine.
@@ -141,6 +142,14 @@ services:
       - KEYCLOAK_URL=http://keycloak:8080
       - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:?defina KEYCLOAK_ADMIN no .env}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?defina KEYCLOAK_ADMIN_PASSWORD no .env}
+      - MINIO_ENDPOINT=minio
+      - MINIO_PORT=9000
+      - MINIO_USE_SSL=false
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:?defina MINIO_ROOT_USER no .env}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD no .env}
+      - S3_ENDPOINT=http://minio:9000
+      - CLAMAV_HOST=clamav
+      - CLAMAV_PORT=3310
 
     working_dir: /workspace
     command: ["/opt/sandbox/boot.sh"]
@@ -400,12 +409,70 @@ services:
         condition: service_healthy
 
   # ---------------------------------------------------------------------
+  # Storage de objetos e antivírus, atrás do profile "storage":
+  #   docker compose --profile storage up -d
+  # Também só na devnet, sem porta no host.
+  # ---------------------------------------------------------------------
+
+  minio:
+    <<: *service-hardening
+    # A MinIO deixou de publicar imagens da edição community no Docker
+    # Hub/quay: use um espelho da imagem oficial no seu registry (.env).
+    image: ${MINIO_IMAGE:?defina MINIO_IMAGE no .env}
+    profiles: ["storage"]
+    container_name: dev-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    # Roda como root da imagem (o volume /data nasce root), mas sem nenhuma
+    # capability e com a imagem somente leitura.
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+      - /root/.minio:rw,nosuid,nodev,size=1m
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # Sem internet de qualquer jeito; evita tentativas de update/telemetria.
+      MINIO_UPDATE: "off"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  clamav:
+    <<: *service-hardening
+    image: clamav/clamav:1.5
+    profiles: ["storage"]
+    container_name: dev-clamav
+    # O freshclam baixa as assinaturas pelo egress-proxy (database.clamav.net
+    # na allowlist); a devnet não tem rota própria para a internet. O clamd
+    # só aceita scans pela porta 3310 (INSTREAM), dentro da devnet.
+    environment:
+      HTTP_PROXY: http://egress-proxy:3128
+      HTTPS_PROXY: http://egress-proxy:3128
+      http_proxy: http://egress-proxy:3128
+      https_proxy: http://egress-proxy:3128
+    volumes:
+      - clamav-data:/var/lib/clamav
+    # clamd carrega as assinaturas em memória (~1 GB, o dobro no reload).
+    mem_limit: ${CLAMAV_MEM_LIMIT:-3g}
+    depends_on:
+      egress-proxy:
+        condition: service_started
+    # Healthcheck vem da imagem (clamdcheck.sh). A imagem já traz
+    # assinaturas; o clamd leva ~30 s para carregá-las antes de ficar healthy.
+
+  # ---------------------------------------------------------------------
   # Painéis web no navegador do host, publicados só em 127.0.0.1 (não na
   # LAN). Os serviços continuam sem porta própria no host.
   # ---------------------------------------------------------------------
   ui-gateway:
     image: nginxinc/nginx-unprivileged:1.27-alpine
-    profiles: ["db", "auth"]
+    profiles: ["db", "auth", "storage"]
     container_name: dev-ui-gateway
     cap_drop:
       - ALL
@@ -419,6 +486,7 @@ services:
     ports:
       - "127.0.0.1:${KEYCLOAK_HOST_PORT:-18080}:8080"
       - "127.0.0.1:${RABBITMQ_UI_HOST_PORT:-18672}:15672"
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-19001}:9001"
     networks:
       - devnet
       - publish
@@ -471,3 +539,5 @@ volumes:
   redis-data:
   rabbitmq-data:
   keycloak-db-data:
+  minio-data:
+  clamav-data:

@@ -13,10 +13,10 @@ internet ◄── egress-proxy (squid, allowlist por domínio, logs) ◄──�
 dev-sandbox (sem capabilities, sem sudo, no-new-privileges,       │ (internal: sem gateway,
              rootfs read-only, limites de CPU/memória/processos) ─┘  sem rota pro host)
       │
-      └──► mysql / postgres / mongodb / redis / rabbitmq / etcd / keycloak
+      └──► mysql / postgres / mongodb / redis / rabbitmq / etcd / keycloak / minio / clamav
            (também só na devnet: sem internet, sem porta no host)
 
-host 127.0.0.1:18080 / :18672 ──► ui-gateway ──► painéis do Keycloak / RabbitMQ
+host 127.0.0.1:18080 / :18672 / :19001 ──► ui-gateway ──► painéis do Keycloak / RabbitMQ / MinIO
 ```
 
 O que isso garante (validado ao subir a stack):
@@ -270,13 +270,13 @@ Ferramentas que ignoram `HTTPS_PROXY` (ex: Maven/Gradle sem config de proxy,
 alguns SDKs) simplesmente não saem — configure o proxy nelas
 (`egress-proxy:3128`).
 
-## Bancos e Keycloak
+## Bancos, Keycloak, MinIO e ClamAV
 
-Atrás de profiles (`db` e `auth`):
+Atrás de profiles (`db`, `auth` e `storage`):
 
 ```bash
-docker compose --profile db --profile auth up -d
-# ou COMPOSE_PROFILES=db,auth no .env
+docker compose --profile db --profile auth --profile storage up -d
+# ou COMPOSE_PROFILES=db,auth,storage no .env
 ```
 
 | Serviço | Host (de dentro do dev-sandbox) | Variáveis prontas |
@@ -288,14 +288,28 @@ docker compose --profile db --profile auth up -d
 | RabbitMQ | `rabbitmq:5672` | `RABBITMQ_URL` |
 | etcd | `etcd:2379` | `ETCD_ENDPOINTS` (sem auth, dev only) |
 | Keycloak | `keycloak:8080` | `KEYCLOAK_URL`, `KEYCLOAK_ADMIN*` |
+| MinIO (S3) | `minio:9000` | `MINIO_ENDPOINT/PORT/USE_SSL/ACCESS_KEY/SECRET_KEY`, `S3_ENDPOINT` |
+| ClamAV (clamd) | `clamav:3310` | `CLAMAV_HOST/PORT` |
 
 Painéis no navegador do host (só `127.0.0.1`, portas configuráveis no `.env`):
 
 - Keycloak: http://localhost:18080
 - RabbitMQ: http://localhost:18672
+- MinIO (console): http://localhost:19001
 
 Os bancos não têm porta no host de propósito. O Keycloak em `start-dev` é só
 para desenvolvimento local.
+
+MinIO: a MinIO parou de publicar imagens community no Docker Hub, então a
+imagem vem de `MINIO_IMAGE` no `.env` (um espelho da oficial no seu registry). Os buckets não são
+criados automaticamente: crie-os pela aplicação, pelo console ou com `mc`.
+
+ClamAV: a imagem já traz assinaturas, então o clamd sobe sem internet (leva
+~30 s para carregá-las). O `freshclam` as atualiza pelo egress-proxy
+(`database.clamav.net` na allowlist) e as guarda no volume `clamav-data`. O
+clamd ocupa ~1 GB de RAM, e o dobro durante o reload das assinaturas
+(`CLAMAV_MEM_LIMIT`, padrão 3g). Para testar: arquivo EICAR via INSTREAM em
+`clamav:3310`.
 
 ## VS Code
 
