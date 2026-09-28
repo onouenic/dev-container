@@ -446,7 +446,7 @@ networks:
     enable_ipv6: false
 
 secrets:
-  # Fine-grained PAT (push). Ver README, "Autenticação do agente".
+  # Classic PAT com escopo `repo` (clone/push). Ver README, "Autenticação do agente".
   gh_token:
     file: ${GH_TOKEN_FILE:-./secrets/gh_token}
   # Classic PAT só com read:packages (npm.pkg.github.com).

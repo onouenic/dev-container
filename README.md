@@ -76,7 +76,7 @@ Regras práticas:
 
 | Credencial | Onde fica | Para quê | Pode |
 |---|---|---|---|
-| **Fine-grained PAT** | `secrets/gh_token` → `/run/secrets/gh_token` → gh config | `git clone/fetch/push`, `gh` de leitura | push de branches nos repos escolhidos |
+| **Classic PAT `repo`** | `secrets/gh_token` → `/run/secrets/gh_token` → gh config | `git clone/pull/push`, `gh` de leitura | push de branches (em todo repo que o dono acessa) |
 | **Classic PAT `read:packages`** | `secrets/gh_packages_token` | `npm/pnpm install` de `@nicbrasil` (npm.pkg.github.com) | só baixar pacotes |
 | `claude login` | volume `claude-code-config` | Claude Code | — |
 | `codex login` | volume `codex-config` | Codex | — |
@@ -87,29 +87,40 @@ Nenhum token do GitHub fica em variável de ambiente: o `gh_token` é gravado no
 gh config no boot, e o `gh_packages_token` é injetado pelos wrappers de
 `npm`/`pnpm` só nos subcomandos que baixam pacotes.
 
-### 1. Token de push (`secrets/gh_token`) — fine-grained PAT
+### 1. Token de push (`secrets/gh_token`) — classic PAT
 
-Crie em *GitHub → Settings → Developer settings → Fine-grained tokens*:
+Crie em *GitHub → Settings → Developer settings → Personal access tokens →
+Tokens (classic)*:
 
-- **Resource owner**: a organização dos repositórios (a org precisa permitir
-  fine-grained tokens; pode exigir aprovação de um admin).
-- **Repository access**: *Only select repositories* — só os que o agente vai usar.
-- **Permissions → Repository**:
-  - `Contents`: **Read and write** (clone, fetch, push)
-  - `Metadata`: Read (obrigatório)
-  - `Pull requests`: **No access** (ou *Read-only* se quiser `gh pr view`)
-  - `Workflows`: **No access** — o push de qualquer mudança em
-    `.github/workflows/` é recusado
-  - `Administration`, `Secrets`, `Actions`, `Environments`: **No access**
+- **Scopes**: só **`repo`** (clone, pull e push em repositórios privados;
+  se o agente só mexer em repos públicos, `public_repo` basta).
+- **Nada além disso**: sem `workflow` (o push de mudanças em
+  `.github/workflows/` é recusado), sem `admin:*`, `delete_repo`,
+  `write:packages`, `read:org` etc.
 - **Expiration**: curta (30–90 dias).
+- Se a org usa SSO/SAML, autorize o token para a org (*Configure SSO*).
+
+**O que isso implica.** Diferente de um fine-grained, o clássico não se
+restringe a repositórios escolhidos nem a permissões por tipo: com `repo`, o
+agente lê todo repositório privado que o dono do token acessa, faz push em
+todos em que ele tem escrita e, pela API, consegue abrir, aprovar e mergear
+PR. Por isso o sandbox combina três camadas:
+
+- **Rulesets no GitHub** (item 2) — a única barreira real, do lado do servidor.
+- **Política de git nas diretrizes** — o `boot.sh` grava em
+  `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` e `~/.qwen/QWEN.md` que o agente
+  só usa `git pull`, `git add`, `git commit` e, no máximo, `git push` da
+  branch de trabalho: nada de PR, merge, push na `main`/`master`, force push
+  ou apagar branch remota. Vale para os três agentes, mas é orientação: não
+  resiste a prompt injection.
+- **`managed-settings.json`** (item 4) — nega esses comandos no Claude Code.
 
 ### 2. Barreira contra merge: rulesets no GitHub (obrigatório)
 
-O token sozinho **não impede merge**: com `Contents: write`, o agente pode
-dar `git merge` local e push na `main`, e não conte com `Pull requests: No
-access` para fechar todo caminho de merge pela API. A barreira real é um
-**ruleset** na branch padrão de cada
-repositório (*Settings → Rules → Rulesets*), alvo `main`/`master`:
+O token sozinho **não impede merge**: o agente pode dar `git merge` local e
+push na `main`, ou mergear um PR pela API. A barreira real é um **ruleset** na
+branch padrão de cada repositório (*Settings → Rules → Rulesets*), alvo
+`main`/`master`:
 
 - **Restrict updates** — só quem está na lista de bypass atualiza a branch
   (isso bloqueia push direto *e* merge de PR)
@@ -120,10 +131,14 @@ repositório (*Settings → Rules → Rulesets*), alvo `main`/`master`:
 
 **Atenção à identidade:** o token age como o usuário dono dele. Se esse
 usuário estiver na lista de bypass (ou for admin com bypass), o agente
-também está — garanta que o dono do token fique **fora** do bypass do ruleset.
-Você pode usar sua própria conta ou, se quiser separar a identidade do agente
-da sua, uma **conta dedicada** (machine user) com escrita nos repositórios;
-nos dois casos o merge continua sendo feito por quem está no bypass.
+também está. Bloquear push direto na `main` **não** impede o dono do token
+de mergear o próprio PR: para o GitHub, o agente *é* você. Isso só fecha se o
+ruleset exigir aprovação de **outra pessoa** (e o dono do token não tiver
+bypass) ou se o merge ficar restrito a quem não é o dono do token. Se você
+usa a própria conta e mergeia com ela, o merge pelo agente fica contido só
+pelas diretrizes e pelo `managed-settings.json`. Uma **conta dedicada**
+(machine user) com escrita apenas nos repositórios do agente separa as duas
+identidades e reduz o raio de dano do clássico.
 
 **CI:** um push do agente dispara os workflows `on: push` com o código dele.
 Não exponha secrets de deploy a workflows que rodam em branches não
@@ -143,10 +158,11 @@ O registry npm do GitHub Packages não aceita fine-grained tokens. Crie um
 ### 4. Camada extra no Claude Code
 
 `/etc/claude-code/managed-settings.json` (dentro da imagem, dono root) nega
-`gh pr create`, `gh pr merge`, `gh repo create/delete`, `gh secret`,
-`gh workflow` e `gh release create`. É só defesa em profundidade: vale para o
-Claude Code, não para Codex/Qwen nem para outras formas de chamar a API. A
-barreira real são os itens 1 e 2.
+`gh pr create/merge/review/edit/ready/close/reopen`, `gh api`,
+`gh repo create/delete`, `gh secret`, `gh workflow`, `gh release create`,
+`git merge`, force push, `git push --delete` e push para `main`/`master`.
+É só defesa em profundidade: vale para o Claude Code, não para Codex/Qwen nem
+para outras formas de chamar a API (ex.: `curl`). A barreira real é o item 2.
 
 ## Pré-requisitos (no host)
 
@@ -190,7 +206,7 @@ Antes de subir, tenha no host:
    e você preenche depois):
    ```bash
    umask 077
-   printf '%s' 'github_pat_...' > secrets/gh_token          # fine-grained PAT (push)
+   printf '%s' 'ghp_...'        > secrets/gh_token          # classic PAT, escopo repo (push)
    printf '%s' 'ghp_...'        > secrets/gh_packages_token  # classic PAT (read:packages)
    ```
 4. **Suba a stack** e confira o boot:

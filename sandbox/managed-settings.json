@@ -3,11 +3,27 @@
     "deny": [
       "Bash(gh pr create *)",
       "Bash(gh pr merge *)",
+      "Bash(gh pr review *)",
+      "Bash(gh pr edit *)",
+      "Bash(gh pr ready *)",
+      "Bash(gh pr close *)",
+      "Bash(gh pr reopen *)",
+      "Bash(gh api *)",
       "Bash(gh repo create *)",
       "Bash(gh repo delete *)",
       "Bash(gh secret *)",
       "Bash(gh workflow *)",
-      "Bash(gh release create *)"
+      "Bash(gh release create *)",
+      "Bash(git merge *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f*)",
+      "Bash(git push *--delete*)",
+      "Bash(git push * main)",
+      "Bash(git push * master)",
+      "Bash(git push *:main)",
+      "Bash(git push *:master)"
     ]
   }
 }

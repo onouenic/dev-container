@@ -8,8 +8,8 @@
 # ler o arquivo — a proteção real é o escopo do token (ver README).
 #
 # Escreve o hosts.yml diretamente em vez de usar `gh auth login --with-token`,
-# porque o `gh auth login` valida escopos e exige read:org, o que um token
-# fine-grained só com Contents não tem.
+# porque o `gh auth login` valida escopos e exige read:org, que o PAT clássico
+# do agente não tem (e não precisa: só `repo`).
 #
 # Nunca loga o token. Falhas viram aviso no log de boot.
 set -u

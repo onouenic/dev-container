@@ -28,6 +28,20 @@ JSON
     echo "Docker CLI apontado para o egress-proxy (${EGRESS_PROXY_IP}:3128)."
 fi
 
+# Política de git do sandbox: o token do GitHub é um PAT clássico, que
+# consegue abrir e mergear PR em qualquer repo do dono. Esta orientação é
+# defesa em profundidade, não barreira (a barreira são os rulesets no GitHub
+# — ver README). Vai para os três agentes, com ou sem nicrobots.
+GIT_POLICY='## Política de git deste sandbox (obrigatória)
+
+Com o GitHub, use SOMENTE: `git pull` (ou `git fetch`), `git add`, `git commit` e, no máximo, `git push` da branch de trabalho.
+
+- NÃO crie, aprove, edite, feche nem faça merge de pull request — nem por `gh`, nem pela API (`gh api`, `curl`), nem por qualquer outro meio.
+- NÃO faça merge no remoto e NÃO faça push para `main`/`master` (nem via `HEAD:main`). Sem `git merge` para integrar branches; quem integra é o usuário.
+- NÃO use `git push --force`/`-f`/`--force-with-lease` nem apague branches ou tags remotas.
+- NÃO crie tags, releases, repositórios, secrets ou workflows no GitHub.
+- Se a tarefa parecer exigir algo fora disso, pare e peça ao usuário.'
+
 # Diretrizes nicrobots: aponta cada agente para /opt/nicrobots (montado
 # read-only do host). É a fonte ÚNICA de regras — precede a pasta robots/ de
 # cada projeto. Regenerado a todo boot; o conteúdo das regras é lido ao vivo
@@ -36,11 +50,6 @@ if [ -f /opt/nicrobots/AGENTS.md ]; then
     POINTER='LEIA E SIGA `/opt/nicrobots/AGENTS.md` e as referências que ele indica (resolva os caminhos relativos a partir de `/opt/nicrobots`).
 
 Esta é a fonte ÚNICA de diretrizes. Ela PRECEDE qualquer `AGENTS.md` ou pasta `robots/` que exista dentro de um projeto: em conflito, valem as regras de `/opt/nicrobots`.'
-    # Claude Code, Codex e Qwen leem cada um o seu arquivo global.
-    mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.qwen"
-    printf '%s\n' "$POINTER" > "$HOME/.claude/CLAUDE.md"
-    printf '%s\n' "$POINTER" > "$HOME/.codex/AGENTS.md"
-    printf '%s\n' "$POINTER" > "$HOME/.qwen/QWEN.md"
     echo "Diretrizes nicrobots ligadas (/opt/nicrobots)."
 
     # Skills nicrobots: symlinks do repo central para o dir de skills do
@@ -59,8 +68,20 @@ Esta é a fonte ÚNICA de diretrizes. Ela PRECEDE qualquer `AGENTS.md` ou pasta 
         echo "Skills nicrobots ligadas ($n)."
     fi
 else
+    POINTER=""
     echo "AVISO: /opt/nicrobots/AGENTS.md ausente — confira NICROBOTS_DIR no .env."
 fi
+
+# Claude Code, Codex e Qwen leem cada um o seu arquivo global.
+mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.qwen"
+for f in "$HOME/.claude/CLAUDE.md" "$HOME/.codex/AGENTS.md" "$HOME/.qwen/QWEN.md"; do
+    if [ -n "$POINTER" ]; then
+        printf '%s\n\n%s\n' "$POINTER" "$GIT_POLICY" > "$f"
+    else
+        printf '%s\n' "$GIT_POLICY" > "$f"
+    fi
+done
+echo "Política de git do sandbox gravada nas diretrizes dos agentes."
 
 echo "Ambiente pronto."
 exec sleep infinity
