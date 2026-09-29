@@ -1,0 +1,19 @@
+#!/bin/sh
+# Wrapper do docker: injeta GITHUB_TOKEN (token só de leitura do GitHub
+# Packages, secret gh_packages_token) apenas nos comandos de build, para
+# BuildKit secrets lidos do ambiente (`--secret id=...,env=GITHUB_TOKEN` ou
+# `secrets: ...: environment: GITHUB_TOKEN` no compose) autenticarem em
+# npm.pkg.github.com (@nicbrasil). `compose up` entra porque pode buildar.
+# Nos demais comandos (run, exec, ps...) o token não é exportado.
+. /opt/sandbox/lib/pkg-token.sh
+
+VALUE_FLAGS="-H --host -c --context --config -l --log-level --tlscacert --tlscert --tlskey \
+-f --file -p --project-name --profile --env-file --project-directory --ansi --progress --parallel"
+
+case "$(subcommands 2 "$@")" in
+    build|"build "*|"buildx build"|"buildx b"|"buildx bake"|"builder build"|"image build"|"compose build"|"compose up")
+        export_pkg_token
+        ;;
+esac
+
+exec /usr/bin/docker "$@"

@@ -4,16 +4,14 @@
 # pacotes, para o .npmrc dos projetos autenticar em npm.pkg.github.com
 # (@nicbrasil). Nos demais subcomandos (run, test, exec...) o token não é
 # exportado.
-TOKEN_FILE=/run/secrets/gh_packages_token
-REAL=/usr/local/bin/pnpm
+. /opt/sandbox/lib/pkg-token.sh
 
-case "${1:-}" in
+VALUE_FLAGS="-C --dir -F --filter --filter-prod --loglevel --reporter --store-dir"
+
+case "$(subcommands 1 "$@")" in
     install|i|add|update|up|upgrade|fetch|dlx|outdated)
-        if [ -z "${GITHUB_TOKEN:-}" ] && [ -s "$TOKEN_FILE" ]; then
-            GITHUB_TOKEN=$(tr -d '[:space:]' < "$TOKEN_FILE")
-            export GITHUB_TOKEN
-        fi
+        export_pkg_token
         ;;
 esac
 
-exec "$REAL" "$@"
+exec /usr/local/bin/pnpm "$@"

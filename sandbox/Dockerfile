@@ -98,10 +98,12 @@ RUN cat /etc/bash.bashrc.sandbox >> /etc/bash.bashrc && rm /etc/bash.bashrc.sand
 # o agente não consegue editá-las nem sobrescrevê-las pelo ~/.claude.
 COPY managed-settings.json /etc/claude-code/managed-settings.json
 
-# Scripts de boot e wrappers de npm/pnpm (ver cada arquivo).
+# Scripts de boot e wrappers de npm/pnpm/docker (ver cada arquivo).
 COPY boot.sh setup-gh-auth.sh fix-permissions.sh /opt/sandbox/
 COPY bin/ /opt/sandbox/bin/
+COPY lib/ /opt/sandbox/lib/
 RUN chmod 0755 /opt/sandbox/*.sh /opt/sandbox/bin/* \
+    && chmod 0644 /opt/sandbox/lib/* \
     && chmod 0644 /etc/claude-code/managed-settings.json
 
 # Instalações "globais" do agente vão para a home (volume), não para /usr.
@@ -110,7 +112,7 @@ ENV PNPM_HOME=/home/$USERNAME/.local/share/pnpm
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 ENV PATH=/opt/sandbox/bin:/home/$USERNAME/.local/bin:/home/$USERNAME/.npm-global/bin:/home/$USERNAME/.local/share/pnpm:$PATH
 # Shells de login (bash -l) reescrevem o PATH no /etc/profile e perderiam os
-# wrappers de npm/pnpm; o profile.d devolve os caminhos acima.
+# wrappers de npm/pnpm/docker; o profile.d devolve os caminhos acima.
 RUN printf 'export PATH="/opt/sandbox/bin:/home/%s/.local/bin:/home/%s/.npm-global/bin:/home/%s/.local/share/pnpm:$PATH"\n' \
         "$USERNAME" "$USERNAME" "$USERNAME" > /etc/profile.d/00-sandbox-path.sh
 

@@ -77,15 +77,21 @@ Regras práticas:
 | Credencial | Onde fica | Para quê | Pode |
 |---|---|---|---|
 | **Classic PAT `repo`** | `secrets/gh_token` → `/run/secrets/gh_token` → gh config | `git clone/pull/push`, `gh` de leitura | push de branches (em todo repo que o dono acessa) |
-| **Classic PAT `read:packages`** | `secrets/gh_packages_token` | `npm/pnpm install` de `@nicbrasil` (npm.pkg.github.com) | só baixar pacotes |
+| **Classic PAT `read:packages`** | `secrets/gh_packages_token` | `npm/pnpm install` e `docker build` de projetos com `@nicbrasil` (npm.pkg.github.com) | só baixar pacotes |
 | `claude login` | volume `claude-code-config` | Claude Code | — |
 | `codex login` | volume `codex-config` | Codex | — |
 | Qwen (backend LLM) | `.env` (`OPENAI_*`) ou `~/.qwen/settings.json` (volume) | Qwen Code | — |
 | Senhas dos bancos / Keycloak | `.env` → env vars do sandbox | serviços locais | só na devnet |
 
 Nenhum token do GitHub fica em variável de ambiente: o `gh_token` é gravado no
-gh config no boot, e o `gh_packages_token` é injetado pelos wrappers de
-`npm`/`pnpm` só nos subcomandos que baixam pacotes.
+gh config no boot, e o `gh_packages_token` é exportado como `GITHUB_TOKEN`
+pelos wrappers de `npm`/`pnpm`/`docker` (`/opt/sandbox/bin`) só nos comandos
+que baixam pacotes ou fazem build (`npm/pnpm install`, `docker build`,
+`docker buildx build|bake`, `docker compose build|up`). Isso cobre o `.npmrc`
+com `${GITHUB_TOKEN}` e os BuildKit secrets lidos do ambiente
+(`secrets: <id>: environment: GITHUB_TOKEN` no compose). O boot também
+explica esse mecanismo nas diretrizes globais dos agentes (`CLAUDE.md`,
+`AGENTS.md`, `QWEN.md`).
 
 ### 1. Token de push (`secrets/gh_token`) — classic PAT
 

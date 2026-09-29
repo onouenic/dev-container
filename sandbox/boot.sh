@@ -42,6 +42,16 @@ Com o GitHub, use SOMENTE: `git pull` (ou `git fetch`), `git add`, `git commit` 
 - NÃO crie tags, releases, repositórios, secrets ou workflows no GitHub.
 - Se a tarefa parecer exigir algo fora disso, pare e peça ao usuário.'
 
+# Como o token do GitHub Packages chega aos comandos: sem isto o agente vê
+# GITHUB_TOKEN vazia e conclui que não há token. Vai para os três agentes.
+PKG_TOKEN_NOTE='## Token do GitHub Packages (@nicbrasil) neste sandbox
+
+- `GITHUB_TOKEN` fica vazia no ambiente DE PROPÓSITO. O token (classic, só `read:packages`) está em `/run/secrets/gh_packages_token`.
+- Os wrappers de `npm`, `pnpm` e `docker` (em `/opt/sandbox/bin`) exportam `GITHUB_TOKEN` a partir desse arquivo só nos comandos que baixam pacotes ou fazem build: `npm install|ci|add|update|view`, `pnpm install|add|update|fetch|dlx`, `docker build`, `docker buildx build|bake`, `docker compose build|up`. Assim `${GITHUB_TOKEN}` no `.npmrc` e `secrets: <id>: environment: GITHUB_TOKEN` no compose funcionam sem nada extra.
+- Chame `npm`, `pnpm` e `docker` pelo nome — não por caminho absoluto, `npx` ou `corepack` —, senão o token não é injetado e o registry responde 401.
+- Fora desses casos, passe o token só ao comando que precisa: `GITHUB_TOKEN="$(cat /run/secrets/gh_packages_token)" <comando>`.
+- NUNCA imprima o token, nem grave em arquivo, nem passe como `--build-arg`/`ARG` ou copie para a imagem. Em Dockerfile, use BuildKit secret (`RUN --mount=type=secret,...`).'
+
 # Diretrizes nicrobots: aponta cada agente para /opt/nicrobots (montado
 # read-only do host). É a fonte ÚNICA de regras — precede a pasta robots/ de
 # cada projeto. Regenerado a todo boot; o conteúdo das regras é lido ao vivo
@@ -76,12 +86,12 @@ fi
 mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.qwen"
 for f in "$HOME/.claude/CLAUDE.md" "$HOME/.codex/AGENTS.md" "$HOME/.qwen/QWEN.md"; do
     if [ -n "$POINTER" ]; then
-        printf '%s\n\n%s\n' "$POINTER" "$GIT_POLICY" > "$f"
+        printf '%s\n\n%s\n\n%s\n' "$POINTER" "$GIT_POLICY" "$PKG_TOKEN_NOTE" > "$f"
     else
-        printf '%s\n' "$GIT_POLICY" > "$f"
+        printf '%s\n\n%s\n' "$GIT_POLICY" "$PKG_TOKEN_NOTE" > "$f"
     fi
 done
-echo "Política de git do sandbox gravada nas diretrizes dos agentes."
+echo "Política de git e nota do token de pacotes gravadas nas diretrizes dos agentes."
 
 echo "Ambiente pronto."
 exec sleep infinity
